@@ -1,6 +1,8 @@
 import numpy as np
 
 
-def featureVector(array, length):
-	return np.reshape(array, [length])
+def toFeatureVector(array):
+    '''Flatten input 2D array into a 1D feature vector.
+    '''
+    return np.reshape(array, [1,-1])
 
