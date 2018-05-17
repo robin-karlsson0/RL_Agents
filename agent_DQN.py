@@ -17,9 +17,9 @@ class Qnetwork_DQN():
 
         # CNN function approximator for processing input image (state 's') into a Q values for each action.
         # 1. Input image as a column feature vectors
-        self.input = tf.placeholder(shape=[None, input_size], dtype=tf.float32)
+        self.input = tf.placeholder(shape=[None, input_size], dtype=tf.float32, name="input")
         # 2. Reshape column feature vectors into an image three-channeled image arrays
-        self.input_image = tf.reshape(self.input, shape=[-1, image_h, image_w, image_c])
+        self.input_image = tf.reshape(self.input, shape=[-1, image_h, image_w, image_c], name="input_image")
         # 3. Convolution layer 1
         self.conv1 = slim.conv2d(inputs=self.input_image,
                                  num_outputs=32,
@@ -48,14 +48,9 @@ class Qnetwork_DQN():
         # 8. Linear activation function to output Q-values for each action
         self.Q_array = slim.fully_connected(self.full4, action_num, activation_fn=None, biases_initializer=None)
 
-
-        # Placeholder for using pre-computed Q-function arrays
-        self.Q_input = tf.placeholder(shape=[None,action_num], dtype=tf.float32)
-
-
         # Get predicted action index or Q value of action
-        self.Q_max_action = tf.argmax(self.Q_input, 1)
-        self.Q_max_value = tf.reduce_max(self.Q_input, 1, keepdims=True)
+        self.Q_max_action = tf.argmax(self.Q_array, 1)
+        self.Q_max_value = tf.reduce_max(self.Q_array, 1, keepdims=True)
 
 
         # Output the Q-value corresponding to taking action 'a' for every row (i.e. experience sample)
@@ -67,13 +62,14 @@ class Qnetwork_DQN():
         self.Q_selected = tf.reduce_sum(tf.multiply(self.Q_array, tf.one_hot(self.a_input, action_num, dtype=tf.float32)), 1)
 
 
-        # Train model
-
+        # Placeholder for the static target term
         self.target_term = tf.placeholder(shape=[None,1], dtype=tf.float32)
-        #self.moving_term = tf.placeholder(shape=[None,1], dtype=tf.float32)
 
+        # Loss function
         self.loss = tf.reduce_mean( tf.square(self.target_term - self.Q_selected) )
+        
 
+        # Training model
         self.trainer = tf.train.AdamOptimizer(learning_rate=eta)
         self.updateModel = self.trainer.minimize(self.loss)
 
@@ -132,3 +128,35 @@ class ExpBuffer():
         '''Return the number of stored experiences within the buffer.
         '''
         return len(self.buffer)
+
+
+def createTargetNetworkUpdateOperations(tf_trainable_vars):
+    '''Create a list where each element is a tensorflow assign operation which overwrites
+       trainable variables of 'target' with 'moving'.
+
+       First HALF of all variables correpsond to the 'moving' Q-network.
+       Later HALF are the 'target' Q-network.
+       [ ... moving ... | ... target ... ]
+
+       Note: The Q-network objects must be initialized in THIS ORDER !!!
+
+       Args:
+         tf_trainable_vars (tf var list) : List containing all trainable variables.
+       Returns:
+         op_list (list) : List containing tf operations to copy 'moving' -> 'target'.
+    '''
+    tot_vars = len(tf_trainable_vars)
+    op_list = []
+    # Get the 'moving' Q-network variables from the first half ('//'' is integer division)
+    for i, moving_var in enumerate(tf_trainable_vars[0:tot_vars//2]):
+        # Define a tf operation which copies the 'moving' variable into 'target' variable
+        op_list.append( tf_trainable_vars[i+tot_vars//2].assign(moving_var.value()) )
+
+    return op_list
+
+
+def updateTargetNetwork(op_list, sess):
+    '''Run previously defined tf operations to overwrite 'target' Q-network with 'moving' Q-network.
+    '''
+    for op in op_list:
+        sess.run(op)
