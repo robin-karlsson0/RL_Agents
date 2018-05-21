@@ -334,8 +334,6 @@ with tf.Session() as sess:
             target_Q_array = sess.run(QNet_target.output, feed_dict={QNet_target.inputs: s_next_minibatch})
             targets = r_minibatch + gamma * np.max(target_Q_array, axis=1)*ep_termination
 
-            # Feed dictionary
-            feed = {}
             # Update moving Q-network
             _ = sess.run(QNet_moving.opt, feed_dict={QNet_moving.inputs: s_minibatch,
                                                      QNet_moving.targetQs_: targets,
