@@ -204,7 +204,6 @@ class QNetwork:
             # Array with an integer for every sample
             self.actions_ = tf.placeholder(tf.int32, [None], name='actions')
             # One hot encode the actions to later choose the Q-value for the action
-            #one_hot_actions = tf.one_hot(self.actions_, action_size)
             one_hot_actions = tf.one_hot(self.actions_, action_size)
             # Target Q values for training
             self.targetQs_ = tf.placeholder(tf.float32, [None], name='target')
@@ -284,11 +283,18 @@ with tf.Session() as sess:
     updateTargetNetwork(QNet_target_update_op_list, sess)
     # TensorBoard storage directory
     tb_train_writer = tf.summary.FileWriter('./logs/1/train', sess.graph)
-    
+
     step_tot = 0
+
     for ep in range(1, ep_max):
-        total_reward = 0
+
+        # Reset environment at start of episode
+        s = env.reset()
+        done = False
         step = 0
+        # Store total reward for the episode
+        ep_rew = 0
+
         while step < step_max:
             step_tot += 1
             # env.render() 
@@ -310,31 +316,11 @@ with tf.Session() as sess:
             #  TAKE ACTION  #
             #################
             s_next, r, done, _ = env.step(a)
-            # Add reward to total episode reward
-            total_reward += r
 
             ######################
             #  STORE EXPERIENCE  #
             ######################
-            ExpBuffer.store((s, a, r, s_next, done))
-            
-            if done:
-                # the episode ends so no next state
-                step = step_max
-                
-                print('Episode: {}'.format(ep),
-                      'Total reward: {}'.format(total_reward),
-                      #'Training loss: {:.4f}'.format(loss),
-                      'Explore P: {:.4f}'.format(explore_p))
-                rewards_list.append(total_reward)
-                
-                # Start new episode
-                env.reset()
-                s, r, done, _ = env.step(env.action_space.sample())
-
-            else:
-                s = s_next
-                step += 1
+            ExpBuffer.store((s, a, r, s_next, done))             
             
             ##############
             #  TRAINING  #
@@ -346,9 +332,6 @@ with tf.Session() as sess:
             # Compute 'target term'
             ep_termination = 1 - done_minibatch
             target_Q_array = sess.run(QNet_target.output, feed_dict={QNet_target.inputs: s_next_minibatch})
-            #print(target_Q_array.shape)
-            #print(ep_termination)
-            #input("")
             targets = r_minibatch + gamma * np.max(target_Q_array, axis=1)*ep_termination
 
             # Feed dictionary
@@ -370,13 +353,37 @@ with tf.Session() as sess:
                                                                      QNet_moving.targetQs_: targets,
                                                                      QNet_moving.actions_: a_minibatch})
                 tb_train_writer.add_summary(tb_summary, step_tot)
+
+            # End of step
+            s = s_next
+            step += 1
+            ep_rew += r
+
+            # End episode
+            if(done == True):
+                print('Episode: {}'.format(ep),
+                      'Total reward: {}'.format(ep_rew),
+                      #'Training loss: {:.4f}'.format(loss),
+                      'Explore P: {:.4f}'.format(explore_p))
+                rewards_list.append((ep,ep_rew,step_tot))
+                break
+
     
         # Save model checkpoint
         if(ep % model_save_interval == 0):
             saveModel(ep, model_save_dir, tf_saver, sess, save_model)
 
 
-plt.plot(rewards_list)
-plt.show()
+
+eps, rews, steps = np.array(rewards_list).T
+eps = np.reshape(eps, [-1,1])
+rews = np.reshape(rews, [-1,1])
+steps = np.reshape(steps, [-1,1])
+out_array = np.concatenate((steps, rews),axis=1)
+print(out_array.shape)
+# Output rewards per episode
+np.savetxt("rew_new.dat", out_array, fmt="%d")
+#plt.plot(rewards_list)
+#plt.show()
 
 env.close()
