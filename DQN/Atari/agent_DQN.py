@@ -28,7 +28,7 @@ seed = 42
 action_repeat = 4
 # Exploration parameters
 explore_start = 1.0            # exploration probability at start
-explore_stop = 0.01            # minimum exploration probability
+explore_stop = 0.1            # minimum exploration probability
 explore_steps = int(1e6)
 explore_decay_rate = (explore_start - explore_stop) / explore_steps            # exponential decay rate for exploration prob
 # Network parameters
@@ -70,6 +70,8 @@ print("  step_tot_max       : {}".format(step_tot_max))
 print("  step_max           : {}".format(step_max))
 print("  gamma              : {}".format(gamma))
 print("  learning_rate      : {}".format(learning_rate))
+print("  seed               : {}".format(seed))
+print("  action_repeat      : {}".format(action_repeat))
 print("  explore_start      : {}".format(explore_start))
 print("  explore_stop       : {}".format(explore_stop))
 print("  explore_steps      : {}".format(explore_steps))
@@ -383,7 +385,7 @@ with tf.Session() as sess:
         ep_rew = 0       
 
         while step < step_max:
-            
+
             step_tot += 1
             # env.render() 
             
@@ -403,7 +405,15 @@ with tf.Session() as sess:
             #################
             #  TAKE ACTION  #
             #################
-            s_next, r, done, _ = env.step(a)
+            # Do 'action repeat' -> Train only on every 4th frame
+            r_repeat_tot = 0
+            for _ in range(action_repeat):
+                s_next, r_repeat, done, _ = env.step(a)
+                r_repeat_tot += r_repeat
+                if(done == True):
+                    break
+            r = r_repeat_tot
+            
             s_next = preprocessImage(s_next)
             buff_s_next.store(s_next)
 
@@ -455,8 +465,8 @@ with tf.Session() as sess:
             # End episode
             if(done == True):
                 print('Episode: {}'.format(ep),
+                      'Steps : {}'.format(step_tot),
                       'Total reward: {}'.format(ep_rew),
-                      #'Training loss: {:.4f}'.format(loss),
                       'Explore P: {:.4f}'.format(explore_p))
                 rewards_list.append((ep,ep_rew,step_tot))
                 break
