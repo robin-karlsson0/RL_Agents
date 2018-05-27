@@ -7,9 +7,9 @@ import gym
 
 import matplotlib.pyplot as plt
 
-from collections import deque
 
-from utils import preprocessImage
+from experience_replay_buffer import ExpBuffer
+from utils import preprocessImage, FrameBuffer
 
 
 
@@ -18,7 +18,7 @@ tf.reset_default_graph()
 #####################
 #  HYPERPARAMETERS  #
 #####################
-env_name = "PongNoFrameskip-v4"
+env_name = "Pong-v0"
 ep_max = int(1e6)          # max number of episodes to learn from
 step_tot_max = int(200e6)
 step_max = int(1e6)                # max steps in an episode
@@ -38,7 +38,7 @@ QNet_update_freq = int(1e4)
 # Experience buffer parameters
 exp_buffer_size = int(1e6)            # ExpBuffer capacity
 minibatch_size = 32                # experience mini-batch size
-pretrain_step_max = minibatch_size   # number experiences to pretrain the ExpBuffer
+pretrain_step_max = minibatch_size+frame_buffer_size   # number experiences to pretrain the ExpBuffer
 # Save parameters
 model_save_interval = 100
 model_save_dir = "./saves"
@@ -89,84 +89,13 @@ print("")
 print("  tensorboard_update_freq : {}".format(tensorboard_update_freq))
 print("")
 
-##############################
-#  EXPERIENCE REPLAY BUFFER  #
-##############################
-class ExpBuffer():
-    '''Class for storing and sampling experiences.
 
-    An experience 'exp' is represented as a list entry [s, a, r, s_next, d]:
-      s [float] : 1D array representing the state.
-      a (int)   : Action taken during the step.
-      r (float) : Reward attained during the step.
-      s_next [float] : 1D array representing the resulting state having taken action 'a'
-      d (bool) : True if episode was terminated.
-    '''
-    def __init__(self, max_size = 1000):
-        self.buffer = deque(maxlen=max_size)
-    
-    def store(self, experience):
-        # Add exp to the back, pushing out the exp in the front
-        self.buffer.append(experience)
-            
-    def sample(self, minibatch_size):
-        '''Return 1D arrays. Each index correspond to a component of the same experience.
-
-        Create a list of length 'minibatch_size' whose elements represents randomly sampled
-        experiences from the buffer.
-
-        Returns:
-          tuple of arrays
-            s : [s1, s2, s3, ...]
-            a : [a1, a2, a3, ...]
-            ...
-        '''
-        # Sample array of integers representing indices of experiences in the buffer
-        index_array = np.random.choice(len(self.buffer), size=minibatch_size, replace=False)
-        # Add sampled experiences to a list
-        exp_list = [self.buffer[i] for i in index_array]
-        # Parse list elements into arrays
-        s      = np.array([exp[0] for exp in exp_list])
-        a      = np.array([exp[1] for exp in exp_list])
-        r      = np.array([exp[2] for exp in exp_list])
-        s_next = np.array([exp[3] for exp in exp_list])
-        d      = np.array([exp[4] for exp in exp_list])
-        return (s, a, r, s_next,d)
-
+# Initialize experience replay buffer object
 ExpBuffer = ExpBuffer(max_size=exp_buffer_size)
 
-
-##################
-#  FRAME BUFFER  #
-##################
-class FrameBuffer():
-    '''
-    '''
-    def __init__(self, size = 4):
-        self.buffer = deque(maxlen=size)
-
-    def store(self, frame):
-        # Add frame to the back, pushing out the frame in the front
-        # [1,2,3,4].append(0) -> [2,3,4,0]
-        self.buffer.append(frame)
-
-    def sample(self):
-        # Return all buffered frames as a 3D array
-        frame_1 = self.buffer[0]
-        frame_2 = self.buffer[1]
-        frame_3 = self.buffer[2]
-        frame_4 = self.buffer[3]
-        frame_stack = np.stack((frame_1, frame_2, frame_3, frame_4), axis=2)
-        return frame_stack
-
-    def reset(self, env):
-        for i in range(frame_buffer_size):
-            s = env.reset()
-            s = preprocessImage(s)
-            self.buffer.append(s)
-
-buff_s = FrameBuffer(size=4)
-buff_s_next = FrameBuffer(size=4)
+# Initialize frame buffer objects for stacking frames when doing inference (i.e. predicting Q-value for 'a')
+buff_f = FrameBuffer(size=frame_buffer_size)
+buff_f_next = FrameBuffer(size=frame_buffer_size)
 
 
 #########################
@@ -322,8 +251,8 @@ QNet_target_update_op_list = createTargetNetworkUpdateOperations(tf_trainable_va
 #  INITIALIZE ENVIRONMENT  #
 ############################
 # Fill frame buffers
-buff_s.reset(env)
-buff_s_next.reset(env)
+buff_f.reset(env)
+buff_f_next.reset(env)
 
 
 ####################
@@ -333,25 +262,14 @@ buff_s_next.reset(env)
 for pretrain_step in range(pretrain_step_max):
     # Make a random action
     a = env.action_space.sample()
-    s_next, r, done, _ = env.step(a)
-    s_next = preprocessImage(s_next)
-    buff_s_next.store(s_next)
+    f_next, r, done, _ = env.step(a)
+    f_next = preprocessImage(f_next)
     # Store experience to buffer
-    ExpBuffer.store((buff_s.sample(), a, r, buff_s_next.sample(), done))
+    exp = (f_next, a, r, done)
+    ExpBuffer.store(exp)
     if done:      
         # Start new episode
         env.reset()
-        # Reset buffers
-        buff_s.reset(env)
-        buff_s_next.reset(env)
-        s, r, done, _ = env.step(env.action_space.sample())
-        s = preprocessImage(s)
-        buff_s.store(s)
-        buff_s_next.store(s)
-
-    else:
-        s = s_next
-        buff_s.store(s)
 
 
 ###############
@@ -371,18 +289,15 @@ with tf.Session() as sess:
     for ep in range(1, ep_max):
 
         # Reset buffer at start of episode
-        buff_s.reset(env)
-        buff_s_next.reset(env)
+        buff_f.reset(env)
+        buff_f_next.reset(env)
 
         # Reset environment at start of episode
-        s = env.reset()
-        s = preprocessImage(s)
-        buff_s.store(s)
-        buff_s_next.store(s_next)
+        env.reset()
         done = False
         step = 0
         # Store total reward for the episode
-        ep_rew = 0       
+        ep_rew = 0    
 
         while step < step_max:
 
@@ -399,7 +314,7 @@ with tf.Session() as sess:
                 a = env.action_space.sample()
             else:
                 # Select optimal action according to policy (i.e. Q-network)
-                Qs = sess.run(QNet_moving.output, feed_dict={QNet_moving.inputs: np.reshape(buff_s.sample(), (1,84,84,4))})
+                Qs = sess.run(QNet_moving.output, feed_dict={QNet_moving.inputs: np.reshape(buff_f.sample(), (1,84,84,4))})
                 a = np.argmax(Qs)
             
             #################
@@ -408,19 +323,20 @@ with tf.Session() as sess:
             # Do 'action repeat' -> Train only on every 4th frame
             r_repeat_tot = 0
             for _ in range(action_repeat):
-                s_next, r_repeat, done, _ = env.step(a)
+                f_next, r_repeat, done, _ = env.step(a)
                 r_repeat_tot += r_repeat
                 if(done == True):
                     break
             r = r_repeat_tot
             
-            s_next = preprocessImage(s_next)
-            buff_s_next.store(s_next)
+            f_next = preprocessImage(f_next)
+            buff_f_next.store(f_next)
 
             ######################
             #  STORE EXPERIENCE  #
             ######################
-            ExpBuffer.store((buff_s.sample(), a, r, buff_s_next.sample(), done))             
+            exp = (f_next, a, r, done)
+            ExpBuffer.store(exp)
             
             ##############
             #  TRAINING  #
@@ -428,10 +344,6 @@ with tf.Session() as sess:
             # Sample one minibatch from buffer into separate arrays
             # Each array index correspond to the same experience
             s_minibatch, a_minibatch, r_minibatch, s_next_minibatch, done_minibatch = ExpBuffer.sample(minibatch_size)
-
-            #print("s_minibatch.shape = {}".format(s_minibatch.shape))
-            #print("s_next_minibatch.shape = {}".format(s_next_minibatch.shape))
-            #input("")
             
             # Compute 'target term'
             ep_termination = 1 - done_minibatch
@@ -457,8 +369,8 @@ with tf.Session() as sess:
                 tb_train_writer.add_summary(tb_summary, step_tot)
 
             # End of step
-            s = s_next
-            buff_s.store(s)
+            f = f_next
+            buff_f.store(f)
             step += 1
             ep_rew += r
 
